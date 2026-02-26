@@ -11,9 +11,39 @@ interface CameraCaptureProps {
   isAnalyzing: boolean;
 }
 
+// Convert HEIC to JPEG using heic2any
+async function convertHeicToJpeg(file: File): Promise<Blob> {
+  // Dynamic import for heic2any
+  const heic2any = (await import('heic2any')).default;
+  
+  return await heic2any({
+    blob: file,
+    toType: 'image/jpeg',
+    quality: 0.8
+  });
+}
+
 // Compress image with aggressive resizing for large files
 async function processImage(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
+    let fileToProcess: Blob = file;
+    
+    // Check if HEIC and convert
+    const fileName = file.name.toLowerCase();
+    const isHeic = fileName.endsWith('.heic') || fileName.endsWith('.heif');
+    
+    if (isHeic) {
+      try {
+        console.log('Converting HEIC to JPEG...');
+        fileToProcess = await convertHeicToJpeg(file);
+        console.log('HEIC converted successfully');
+      } catch (error) {
+        console.error('HEIC conversion error:', error);
+        reject(new Error('No pude convertir la imagen HEIC. Intenta con otra foto o usa la cámara.'));
+        return;
+      }
+    }
+    
     const img = new Image();
     const reader = new FileReader();
     
@@ -22,44 +52,41 @@ async function processImage(file: File): Promise<string> {
     };
     
     img.onload = () => {
-      // Aggressive resize for large images (like 48MP HEIC)
+      // Aggressive resize for large images (like 48MP)
       const MAX_WIDTH = 800;
       const MAX_HEIGHT = 800;
-      const MAX_FILE_SIZE_KB = 300; // Target size
+      const MAX_FILE_SIZE_KB = 250;
       
       let width = img.width;
       let height = img.height;
       
-      // Calculate scale factor for very large images
+      // Calculate scale factor
       const scaleFactor = Math.min(MAX_WIDTH / width, MAX_HEIGHT / height, 1);
       width = Math.round(width * scaleFactor);
       height = Math.round(height * scaleFactor);
       
-      // Create canvas and resize
+      // Create canvas
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
       
       const ctx = canvas.getContext('2d');
       if (!ctx) {
-        reject(new Error('Could not get canvas context'));
+        reject(new Error('Error al procesar imagen'));
         return;
       }
       
-      // Enable image smoothing for better quality
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      
-      // Draw resized image
       ctx.drawImage(img, 0, 0, width, height);
       
-      // Try different compression levels until we get under target size
+      // Compress
       let quality = 0.7;
       let dataUrl = canvas.toDataURL('image/jpeg', quality);
       let base64Length = dataUrl.length - 'data:image/jpeg;base64,'.length;
       let sizeInKB = Math.round((base64Length * 3) / 4 / 1024);
       
-      // Reduce quality if still too large
+      // Reduce quality if too large
       while (sizeInKB > MAX_FILE_SIZE_KB && quality > 0.1) {
         quality -= 0.1;
         dataUrl = canvas.toDataURL('image/jpeg', quality);
@@ -67,19 +94,19 @@ async function processImage(file: File): Promise<string> {
         sizeInKB = Math.round((base64Length * 3) / 4 / 1024);
       }
       
-      console.log(`Image processed: ${width}x${height}, ${sizeInKB}KB, quality: ${quality.toFixed(1)}`);
+      console.log(`Image: ${width}x${height}, ${sizeInKB}KB`);
       resolve(dataUrl);
     };
     
     img.onerror = () => {
-      reject(new Error('Failed to load image - may be unsupported format'));
+      reject(new Error('Error al cargar imagen'));
     };
     
     reader.onerror = () => {
-      reject(new Error('Failed to read file'));
+      reject(new Error('Error al leer archivo'));
     };
     
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(fileToProcess);
   });
 }
 
@@ -95,7 +122,6 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
   const [isProcessingImage, setIsProcessingImage] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Start camera when facing mode changes
   useEffect(() => {
     let mounted = true;
     
@@ -114,19 +140,14 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
           }
         });
         
-        if (!mounted) {
-          newStream.getTracks().forEach(track => track.stop());
-          return;
-        }
+        if (!mounted) return;
         
         streamRef.current = newStream;
-        
         if (videoRef.current) {
           videoRef.current.srcObject = newStream;
         }
         setIsLoading(false);
       } catch (error) {
-        console.error('Error accessing camera:', error);
         if (mounted) {
           setHasPermission(false);
           setIsLoading(false);
@@ -153,7 +174,6 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
       const video = videoRef.current;
       const canvas = canvasRef.current;
       
-      // Limit capture size
       const maxSize = 800;
       let width = video.videoWidth;
       let height = video.videoHeight;
@@ -183,22 +203,14 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
     if (!file) return;
     
     setErrorMsg(null);
-    
-    // Check file size - accept up to 100MB original file
-    if (file.size > 100 * 1024 * 1024) {
-      setErrorMsg('La imagen es muy grande. Intenta con una más pequeña.');
-      return;
-    }
-    
     setIsProcessingImage(true);
     
     try {
-      // Process and compress image
       const processedImage = await processImage(file);
       setCapturedImage(processedImage);
     } catch (error: any) {
-      console.error('Error processing image:', error);
-      setErrorMsg('No pude procesar esta imagen. Intenta con otra foto o usa la cámara.');
+      console.error('Error:', error);
+      setErrorMsg(error.message || 'Error al procesar imagen');
     } finally {
       setIsProcessingImage(false);
     }
@@ -213,21 +225,16 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
   const retake = () => {
     setCapturedImage(null);
     setErrorMsg(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  // No camera permission - show upload option
   if (hasPermission === false) {
     return (
       <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center p-6">
         <div className="text-white text-center space-y-4 max-w-sm">
           <Camera className="w-16 h-16 mx-auto opacity-50" />
-          <p className="text-lg font-medium">Acceso a cámara denegado</p>
-          <p className="text-sm opacity-70">
-            Puedes subir una foto desde tu galería
-          </p>
+          <p className="text-lg font-medium">Sin acceso a cámara</p>
+          <p className="text-sm opacity-70">Sube una foto desde tu galería</p>
           
           {errorMsg && (
             <div className="bg-red-500/20 text-red-300 p-3 rounded-lg text-sm">
@@ -260,7 +267,7 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/*,.heic,.heif"
             onChange={handleFileUpload}
             className="hidden"
           />
@@ -268,36 +275,12 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
         
         {capturedImage && (
           <div className="fixed inset-0 z-50 bg-black flex flex-col">
-            <img 
-              src={capturedImage} 
-              alt="Uploaded" 
-              className="flex-1 object-contain"
-            />
+            <img src={capturedImage} alt="Uploaded" className="flex-1 object-contain" />
             <div className="p-4 bg-black/80 pb-safe">
               <div className="flex items-center justify-center gap-4">
-                <Button
-                  variant="outline"
-                  size="lg"
-                  onClick={retake}
-                  className="rounded-full px-8 text-white border-white/30"
-                  disabled={isAnalyzing}
-                >
-                  Cambiar
-                </Button>
-                <Button
-                  size="lg"
-                  onClick={confirmCapture}
-                  className="rounded-full px-8 bg-emerald-600 hover:bg-emerald-700"
-                  disabled={isAnalyzing}
-                >
-                  {isAnalyzing ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Analizando...
-                    </>
-                  ) : (
-                    'Analizar'
-                  )}
+                <Button variant="outline" size="lg" onClick={retake} className="rounded-full px-6 text-white border-white/30" disabled={isAnalyzing}>Cambiar</Button>
+                <Button size="lg" onClick={confirmCapture} className="rounded-full px-6 bg-emerald-600 hover:bg-emerald-700" disabled={isAnalyzing}>
+                  {isAnalyzing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Analizando...</> : 'Analizar'}
                 </Button>
               </div>
             </div>
@@ -309,7 +292,6 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
 
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
-      {/* Loading indicator */}
       {(isLoading || isProcessingImage) && !capturedImage && (
         <div className="absolute inset-0 flex items-center justify-center bg-black z-10">
           <div className="text-white text-center">
@@ -319,7 +301,6 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
         </div>
       )}
       
-      {/* Error message */}
       {errorMsg && !capturedImage && (
         <div className="absolute top-16 left-4 right-4 bg-red-500/90 text-white p-3 rounded-lg text-sm z-20">
           {errorMsg}
@@ -327,99 +308,39 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
         </div>
       )}
       
-      {/* Video or captured image */}
       <div className="relative flex-1">
         {capturedImage ? (
-          <img 
-            src={capturedImage} 
-            alt="Captured" 
-            className="w-full h-full object-contain"
-          />
+          <img src={capturedImage} alt="Captured" className="w-full h-full object-contain" />
         ) : (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full h-full object-cover"
-          />
+          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
         )}
       </div>
 
-      {/* Hidden canvas for capture */}
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Close button */}
-      <button
-        onClick={onClose}
-        className="absolute top-4 right-4 p-3 rounded-full bg-black/50 text-white z-20"
-      >
+      <button onClick={onClose} className="absolute top-4 right-4 p-3 rounded-full bg-black/50 text-white z-20">
         <X className="w-6 h-6" />
       </button>
 
-      {/* Controls */}
-      <div className={cn(
-        "p-4 bg-gradient-to-t from-black/80 to-transparent",
-        capturedImage ? "pb-safe" : ""
-      )}>
+      <div className={cn("p-4 bg-gradient-to-t from-black/80 to-transparent", capturedImage ? "pb-safe" : "")}>
         {capturedImage ? (
           <div className="flex items-center justify-center gap-4">
-            <Button
-              variant="outline"
-              size="lg"
-              onClick={retake}
-              className="rounded-full px-6 bg-white/10 border-white/30 text-white hover:bg-white/20"
-              disabled={isAnalyzing}
-            >
-              Cambiar
-            </Button>
-            <Button
-              size="lg"
-              onClick={confirmCapture}
-              className="rounded-full px-6 bg-emerald-600 hover:bg-emerald-700"
-              disabled={isAnalyzing}
-            >
-              {isAnalyzing ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Analizando...
-                </>
-              ) : (
-                'Analizar'
-              )}
+            <Button variant="outline" size="lg" onClick={retake} className="rounded-full px-6 bg-white/10 border-white/30 text-white" disabled={isAnalyzing}>Cambiar</Button>
+            <Button size="lg" onClick={confirmCapture} className="rounded-full px-6 bg-emerald-600 hover:bg-emerald-700" disabled={isAnalyzing}>
+              {isAnalyzing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Analizando...</> : 'Analizar'}
             </Button>
           </div>
         ) : (
           <div className="flex items-center justify-center gap-4">
-            {/* Upload button */}
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="flex flex-col items-center gap-1 p-3 rounded-xl bg-white/20 text-white hover:bg-white/30 transition-colors"
-            >
+            <button onClick={() => fileInputRef.current?.click()} className="flex flex-col items-center gap-1 p-3 rounded-xl bg-white/20 text-white">
               <Upload className="w-6 h-6" />
               <span className="text-xs">Subir</span>
             </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleFileUpload}
-              className="hidden"
-            />
-
-            {/* Capture button */}
-            <button
-              onClick={capturePhoto}
-              className="w-16 h-16 rounded-full border-4 border-white bg-white/20 flex items-center justify-center hover:bg-white/30 transition-colors"
-            >
+            <input ref={fileInputRef} type="file" accept="image/*,.heic,.heif" onChange={handleFileUpload} className="hidden" />
+            <button onClick={capturePhoto} className="w-16 h-16 rounded-full border-4 border-white bg-white/20 flex items-center justify-center">
               <div className="w-12 h-12 rounded-full bg-white" />
             </button>
-
-            {/* Switch camera */}
-            <button
-              onClick={switchCamera}
-              className="flex flex-col items-center gap-1 p-3 rounded-xl bg-white/20 text-white hover:bg-white/30 transition-colors"
-            >
+            <button onClick={switchCamera} className="flex flex-col items-center gap-1 p-3 rounded-xl bg-white/20 text-white">
               <SwitchCamera className="w-6 h-6" />
               <span className="text-xs">Girar</span>
             </button>
