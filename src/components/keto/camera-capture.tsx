@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, X, SwitchCamera, Loader2, Upload, Image as ImageIcon, AlertCircle, Smartphone } from 'lucide-react';
+import { Camera, X, SwitchCamera, Loader2, Upload, Image as ImageIcon, AlertCircle, CheckCircle, CameraOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface CameraCaptureProps {
@@ -25,7 +25,7 @@ function isHeicFile(file: File): boolean {
   );
 }
 
-// Convert HEIC to JPEG
+// Convert HEIC to JPEG using heic2any
 async function convertHeicToJpeg(file: File): Promise<Blob> {
   try {
     const heic2anyModule = await import('heic2any');
@@ -34,115 +34,109 @@ async function convertHeicToJpeg(file: File): Promise<Blob> {
     const result = await heic2any({
       blob: file,
       toType: 'image/jpeg',
-      quality: 0.7,
+      quality: 0.6,
       multiple: false
     });
     
     return result as Blob;
   } catch (error: any) {
     console.error('HEIC conversion failed:', error);
-    throw new Error('HEIC no soportado');
+    throw new Error('HEIC_CONVERSION_FAILED');
   }
 }
 
-// Process image with compression
+// Process and compress image
 async function processImage(file: File): Promise<string> {
   return new Promise(async (resolve, reject) => {
-    console.log('Processing:', { name: file.name, type: file.type, size: `${(file.size / 1024 / 1024).toFixed(2)}MB` });
+    const isHeic = isHeicFile(file);
+    console.log('Processing file:', { name: file.name, type: file.type, sizeMB: (file.size / 1024 / 1024).toFixed(2), isHeic });
     
-    // Function to load and compress image
-    const loadAndCompress = async (blob: Blob): Promise<string> => {
-      return new Promise((res, rej) => {
-        const img = new Image();
-        const url = URL.createObjectURL(blob);
-        
-        img.onload = () => {
-          URL.revokeObjectURL(url);
-          
-          if (img.width === 0 || img.height === 0) {
-            rej(new Error('Invalid image dimensions'));
-            return;
-          }
-          
-          // Aggressive resize
-          const MAX_SIZE = 800;
-          const MAX_FILE_KB = 180;
-          
-          let width = img.width;
-          let height = img.height;
-          const pixels = width * height;
-          
-          // Calculate scale
-          let scale = Math.min(MAX_SIZE / width, MAX_SIZE / height, 1);
-          if (pixels > 5000000) scale = Math.min(scale, 0.4); // Extra for 48MP
-          
-          width = Math.round(width * scale);
-          height = Math.round(height * scale);
-          
-          console.log(`Resizing: ${img.width}x${img.height} → ${width}x${height}`);
-          
-          // Create canvas
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          
-          const ctx = canvas.getContext('2d');
-          if (!ctx) { rej(new Error('Canvas error')); return; }
-          
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = 'high';
-          ctx.drawImage(img, 0, 0, width, height);
-          
-          // Compress
-          let quality = 0.6;
-          let dataUrl = canvas.toDataURL('image/jpeg', quality);
-          let sizeKB = Math.round((dataUrl.length * 3) / 4 / 1024);
-          
-          while (sizeKB > MAX_FILE_KB && quality > 0.15) {
-            quality -= 0.1;
-            dataUrl = canvas.toDataURL('image/jpeg', quality);
-            sizeKB = Math.round((dataUrl.length * 3) / 4 / 1024);
-          }
-          
-          console.log(`Final: ${width}x${height}, ${sizeKB}KB, q=${quality.toFixed(1)}`);
-          res(dataUrl);
-        };
-        
-        img.onerror = () => {
-          URL.revokeObjectURL(url);
-          rej(new Error('Failed to load image'));
-        };
-        
-        img.src = url;
-      });
-    };
-    
-    // Try direct load first
-    try {
-      const result = await loadAndCompress(file);
-      resolve(result);
-      return;
-    } catch (directError: any) {
-      console.log('Direct load failed:', directError.message);
-      
-      if (!isHeicFile(file)) {
-        reject(new Error('No pude cargar la imagen. Usa la cámara de la app.'));
+    // For HEIC files, attempt conversion
+    if (isHeic) {
+      try {
+        console.log('Attempting HEIC conversion...');
+        const converted = await convertHeicToJpeg(file);
+        console.log('HEIC converted successfully, size:', (converted.size / 1024).toFixed(0), 'KB');
+        // Continue with converted blob
+        processBlob(converted, resolve, reject);
+      } catch (error: any) {
+        console.error('HEIC conversion failed');
+        reject(new Error('HEIC_NOT_SUPPORTED'));
         return;
       }
-      
-      // Try HEIC conversion
-      console.log('Attempting HEIC conversion...');
-      try {
-        const converted = await convertHeicToJpeg(file);
-        console.log('HEIC converted:', (converted.size / 1024).toFixed(0), 'KB');
-        const result = await loadAndCompress(converted);
-        resolve(result);
-      } catch (heicError: any) {
-        console.error('HEIC error:', heicError);
-        reject(new Error('📷 HEIC no soportado.\n\nUsa la CÁMARA de la app o cambia:\nAjustes > Cámara > Formatos > Compatible'));
-      }
+    } else {
+      // Process non-HEIC directly
+      processBlob(file, resolve, reject);
     }
   });
+}
+
+// Helper to process blob into compressed image
+function processBlob(blob: Blob, resolve: (value: string) => void, reject: (reason: any) => void) {
+  const img = new Image();
+  const url = URL.createObjectURL(blob);
+  
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    
+    if (img.width === 0 || img.height === 0) {
+      reject(new Error('INVALID_IMAGE'));
+      return;
+    }
+    
+    // Aggressive resize for large images
+    const MAX_SIZE = 800;
+    const MAX_FILE_KB = 180;
+    
+    let width = img.width;
+    let height = img.height;
+    const pixels = width * height;
+    
+    // Calculate scale - extra compression for large images (48MP)
+    let scale = Math.min(MAX_SIZE / width, MAX_SIZE / height, 1);
+    if (pixels > 5000000) scale = Math.min(scale, 0.4);
+    
+    width = Math.round(width * scale);
+    height = Math.round(height * scale);
+    
+    console.log(`Image: ${img.width}x${img.height} -> ${width}x${height}`);
+    
+    // Create canvas
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      reject(new Error('CANVAS_ERROR'));
+      return;
+    }
+    
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, width, height);
+    
+    // Compress with quality adjustment
+    let quality = 0.6;
+    let dataUrl = canvas.toDataURL('image/jpeg', quality);
+    let sizeKB = Math.round((dataUrl.length * 3) / 4 / 1024);
+    
+    while (sizeKB > MAX_FILE_KB && quality > 0.15) {
+      quality -= 0.1;
+      dataUrl = canvas.toDataURL('image/jpeg', quality);
+      sizeKB = Math.round((dataUrl.length * 3) / 4 / 1024);
+    }
+    
+    console.log(`Final: ${width}x${height}, ${sizeKB}KB, quality=${quality.toFixed(1)}`);
+    resolve(dataUrl);
+  };
+  
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    reject(new Error('LOAD_FAILED'));
+  };
+  
+  img.src = url;
 }
 
 export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCaptureProps) {
@@ -157,6 +151,7 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessingImage, setIsProcessingImage] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showHeicError, setShowHeicError] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -164,7 +159,7 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
     async function initCamera() {
       try {
         setIsLoading(true);
-        if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current?.getTracks().forEach(t => t.stop());
         
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } }
@@ -226,13 +221,19 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
     if (!file) return;
     
     setErrorMsg(null);
+    setShowHeicError(false);
     setIsProcessingImage(true);
     
     try {
       const processed = await processImage(file);
       setCapturedImage(processed);
     } catch (error: any) {
-      setErrorMsg(error.message);
+      console.error('Processing error:', error.message);
+      if (error.message === 'HEIC_NOT_SUPPORTED') {
+        setShowHeicError(true);
+      } else {
+        setErrorMsg('No pude procesar la imagen. Intenta con otra foto.');
+      }
     } finally {
       setIsProcessingImage(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -246,19 +247,66 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
   const retake = useCallback(() => {
     setCapturedImage(null);
     setErrorMsg(null);
+    setShowHeicError(false);
   }, []);
+
+  // HEIC Error Modal - Shows when HEIC can't be converted
+  if (showHeicError && !capturedImage) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black flex items-center justify-center p-6">
+        <div className="bg-card rounded-2xl p-6 max-w-sm w-full text-center space-y-4">
+          <div className="w-16 h-16 rounded-full bg-amber-500/20 flex items-center justify-center mx-auto">
+            <AlertCircle className="w-8 h-8 text-amber-500" />
+          </div>
+          
+          <h3 className="text-lg font-bold">Formato HEIC</h3>
+          
+          <p className="text-sm text-muted-foreground">
+            Tu iPhone guarda fotos en formato HEIC que no es compatible con navegadores web.
+          </p>
+          
+          <div className="bg-muted/50 rounded-xl p-4 text-left space-y-3">
+            <div className="flex gap-3">
+              <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center shrink-0 text-white text-xs font-bold">1</div>
+              <div>
+                <p className="text-sm font-medium">Usa la cámara de la app</p>
+                <p className="text-xs text-muted-foreground">El botón blanco grande captura directamente en JPEG</p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center shrink-0 text-white text-xs font-bold">2</div>
+              <div>
+                <p className="text-sm font-medium">Cambia tu iPhone</p>
+                <p className="text-xs text-muted-foreground">Ajustes → Cámara → Formatos → Compatible</p>
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex flex-col gap-2 pt-2">
+            <Button onClick={retake} className="w-full gap-2">
+              <Camera className="w-4 h-4" />
+              Usar Cámara
+            </Button>
+            <Button variant="outline" onClick={onClose} className="w-full">
+              Cerrar
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // No permission view
   if (hasPermission === false) {
     return (
-      <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center p-6">
+      <div className="fixed inset-0 z-50 bg-black flex items-center justify-center p-6">
         <div className="text-white text-center space-y-4 max-w-sm">
-          <Camera className="w-16 h-16 mx-auto opacity-50" />
+          <CameraOff className="w-16 h-16 mx-auto opacity-50" />
           <p className="text-lg font-medium">Sin acceso a cámara</p>
           <p className="text-sm opacity-70">Sube una foto desde tu galería</p>
           
           {errorMsg && (
-            <div className="bg-red-500/20 text-red-200 p-4 rounded-xl text-sm whitespace-pre-line text-left">
+            <div className="bg-red-500/20 text-red-200 p-4 rounded-xl text-sm">
               {errorMsg}
             </div>
           )}
@@ -279,7 +327,7 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
         </div>
         
         {capturedImage && (
-          <div className="fixed inset-0 z-50 bg-black flex flex-col">
+          <div className="fixed inset-0 bg-black flex flex-col">
             <img src={capturedImage} alt="Preview" className="flex-1 object-contain" />
             <div className="p-4 bg-black/80 pb-safe">
               <div className="flex justify-center gap-4">
@@ -307,10 +355,10 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
       )}
       
       {errorMsg && !capturedImage && (
-        <div className="absolute top-16 left-4 right-4 bg-red-500/90 text-white p-4 rounded-xl text-sm z-20 whitespace-pre-line">
-          <AlertCircle className="w-5 h-5 inline mr-2" />
-          {errorMsg}
-          <button onClick={() => setErrorMsg(null)} className="absolute top-2 right-2 font-bold text-lg">×</button>
+        <div className="absolute top-16 left-4 right-4 bg-red-500/90 text-white p-4 rounded-xl text-sm z-20 flex items-center gap-2">
+          <AlertCircle className="w-5 h-5 shrink-0" />
+          <span>{errorMsg}</span>
+          <button onClick={() => setErrorMsg(null)} className="absolute right-3 font-bold text-lg">×</button>
         </div>
       )}
       
@@ -343,7 +391,7 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
               <span className="text-xs">Subir</span>
             </button>
             <input ref={fileInputRef} type="file" accept="image/*,.heic,.heif" onChange={handleFileUpload} className="hidden" />
-            <button onClick={capturePhoto} className="w-16 h-16 rounded-full border-4 border-white bg-white/20 flex items-center justify-center">
+            <button onClick={capturePhoto} className="w-16 h-16 rounded-full border-4 border-white bg-white/20 flex items-center justify-center active:scale-95 transition-transform">
               <div className="w-12 h-12 rounded-full bg-white" />
             </button>
             <button onClick={switchCamera} className="flex flex-col items-center gap-1 p-3 rounded-xl bg-white/20 text-white">
