@@ -24,7 +24,9 @@ import {
   Pencil,
   X,
   TrendingUp,
-  Calendar
+  Calendar,
+  Leaf,
+  History
 } from 'lucide-react';
 import { MacroRing } from '@/components/keto/macro-ring';
 import { CameraCapture } from '@/components/keto/camera-capture';
@@ -94,7 +96,7 @@ function loadSettings(): UserSettings {
   return data ? JSON.parse(data) : { dailyCalories: 2000, dailyCarbs: 20, dailyProtein: 100, dailyFat: 150, dailyFiber: 30 };
 }
 
-function saveSettings(settings: UserSettings): void {
+function saveSettingsFn(settings: UserSettings): void {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
@@ -103,7 +105,7 @@ function loadApiKey(): string {
   return localStorage.getItem(API_KEY_KEY) || '';
 }
 
-function saveApiKey(key: string): void {
+function saveApiKeyFn(key: string): void {
   localStorage.setItem(API_KEY_KEY, key);
 }
 
@@ -228,7 +230,6 @@ export default function KetoCounterApp() {
       });
       const result = await response.json();
       if (result.success && result.data?.foods?.length > 0) {
-        // Ensure netCarbs = carbs - fiber
         result.data.foods = result.data.foods.map((f: any) => ({
           ...f,
           netCarbs: Math.max(0, (f.carbs || 0) - (f.fiber || 0))
@@ -362,7 +363,6 @@ export default function KetoCounterApp() {
 
   const handleSaveEdit = () => {
     if (editingMeal) {
-      // Recalculate netCarbs
       const updatedMeal = {
         ...editingMeal,
         netCarbs: Math.max(0, editingMeal.carbs - editingMeal.fiber)
@@ -375,10 +375,10 @@ export default function KetoCounterApp() {
 
   const handleSaveSettings = (newSettings: UserSettings, newApiKey?: string) => {
     setSettings(newSettings);
-    saveSettings(newSettings);
+    saveSettingsFn(newSettings);
     if (newApiKey !== undefined) {
       setApiKey(newApiKey);
-      saveApiKey(newApiKey);
+      saveApiKeyFn(newApiKey);
     }
     setShowSettings(false);
   };
@@ -403,9 +403,6 @@ export default function KetoCounterApp() {
                 <Key className="w-5 h-5" />
               </Button>
             )}
-            <Button variant="ghost" size="icon" onClick={() => setShowWeeklyStats(true)} title="Progreso semanal">
-              <TrendingUp className="w-5 h-5" />
-            </Button>
             <Button variant="ghost" size="icon" onClick={toggleDarkMode}>
               {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
             </Button>
@@ -450,9 +447,19 @@ export default function KetoCounterApp() {
         <div className="grid grid-cols-4 gap-2 mt-3 w-full">
           <Card className="p-2 text-center"><Wheat className="w-4 h-4 mx-auto text-yellow-500" /><p className="text-base font-bold">{totals.carbs.toFixed(0)}g</p><p className="text-[10px] text-muted-foreground">Carbs</p></Card>
           <Card className="p-2 text-center"><Droplets className="w-4 h-4 mx-auto text-purple-500" /><p className="text-base font-bold">{totals.fat.toFixed(0)}g</p><p className="text-[10px] text-muted-foreground">Grasa</p></Card>
-          <Card className="p-2 text-center"><Flame className="w-4 h-4 mx-auto text-orange-500" /><p className="text-base font-bold">{totals.fiber.toFixed(0)}g</p><p className="text-[10px] text-muted-foreground">Fibra</p></Card>
+          <Card className="p-2 text-center"><Leaf className="w-4 h-4 mx-auto text-teal-500" /><p className="text-base font-bold">{totals.fiber.toFixed(0)}g</p><p className="text-[10px] text-muted-foreground">Fibra</p></Card>
           <Card className="p-2 text-center"><Utensils className="w-4 h-4 mx-auto text-blue-500" /><p className="text-base font-bold">{meals.length}</p><p className="text-[10px] text-muted-foreground">Comidas</p></Card>
         </div>
+
+        {/* Weekly Progress Button */}
+        <Button 
+          variant="outline" 
+          className="w-full mt-3 flex items-center justify-center gap-2 py-6"
+          onClick={() => setShowWeeklyStats(true)}
+        >
+          <TrendingUp className="w-5 h-5 text-emerald-500" />
+          <span className="font-medium">Ver Progreso Semanal</span>
+        </Button>
 
         {/* Meals */}
         <Card className="mt-3 w-full box-border">
@@ -652,7 +659,7 @@ export default function KetoCounterApp() {
                 <Button 
                   className="flex-1" 
                   onClick={() => {
-                    saveApiKey(apiKey);
+                    saveApiKeyFn(apiKey);
                     setShowApiKeySetup(false);
                   }}
                   disabled={!apiKey.startsWith('gsk_')}
@@ -743,6 +750,10 @@ function WeeklyStats({ settings }: { settings: UserSettings }) {
     ? Math.round(stats.reduce((sum, s) => sum + s.totalCalories, 0) / stats.length)
     : 0;
   
+  const avgFiber = stats.length > 0 
+    ? (stats.reduce((sum, s) => sum + s.totalFiber, 0) / stats.length).toFixed(1)
+    : '0';
+  
   const ketoDays = stats.filter(s => s.totalNetCarbs <= settings.dailyCarbs && s.mealCount > 0).length;
   
   const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
@@ -750,18 +761,22 @@ function WeeklyStats({ settings }: { settings: UserSettings }) {
   return (
     <div className="space-y-4">
       {/* Summary Cards */}
-      <div className="grid grid-cols-3 gap-2">
-        <Card className="p-3 text-center">
-          <p className="text-2xl font-bold text-emerald-500">{avgNetCarbs}g</p>
-          <p className="text-[10px] text-muted-foreground">Promedio Net Carbs</p>
+      <div className="grid grid-cols-2 gap-3">
+        <Card className="p-4 text-center bg-emerald-50 dark:bg-emerald-900/20">
+          <p className="text-3xl font-bold text-emerald-600">{avgNetCarbs}g</p>
+          <p className="text-xs text-muted-foreground">Promedio Net Carbs</p>
         </Card>
-        <Card className="p-3 text-center">
-          <p className="text-2xl font-bold text-orange-500">{avgCalories}</p>
-          <p className="text-[10px] text-muted-foreground">Promedio Calorías</p>
+        <Card className="p-4 text-center bg-blue-50 dark:bg-blue-900/20">
+          <p className="text-3xl font-bold text-blue-600">{avgCalories}</p>
+          <p className="text-xs text-muted-foreground">Promedio Calorías</p>
         </Card>
-        <Card className="p-3 text-center">
-          <p className="text-2xl font-bold text-blue-500">{ketoDays}/7</p>
-          <p className="text-[10px] text-muted-foreground">Días en Cetosis</p>
+        <Card className="p-4 text-center bg-teal-50 dark:bg-teal-900/20">
+          <p className="text-3xl font-bold text-teal-600">{avgFiber}g</p>
+          <p className="text-xs text-muted-foreground">Promedio Fibra</p>
+        </Card>
+        <Card className="p-4 text-center bg-purple-50 dark:bg-purple-900/20">
+          <p className="text-3xl font-bold text-purple-600">{ketoDays}/7</p>
+          <p className="text-xs text-muted-foreground">Días en Cetosis</p>
         </Card>
       </div>
       
@@ -812,8 +827,8 @@ function WeeklyStats({ settings }: { settings: UserSettings }) {
       {/* Daily Details */}
       <Card className="p-4">
         <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
-          <Calendar className="w-4 h-4" />
-          Detalle por Día
+          <History className="w-4 h-4" />
+          Historial de la Semana
         </h3>
         <div className="space-y-2">
           {stats.slice().reverse().map((day, index) => {
@@ -824,11 +839,12 @@ function WeeklyStats({ settings }: { settings: UserSettings }) {
             return (
               <div 
                 key={index} 
-                className={`flex items-center justify-between p-2 rounded-lg ${isToday ? 'bg-emerald-50 dark:bg-emerald-900/20' : 'bg-muted/50'}`}
+                className={`flex items-center justify-between p-3 rounded-lg ${isToday ? 'bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800' : 'bg-muted/50'}`}
               >
                 <div>
                   <p className={`text-sm font-medium ${isToday ? 'text-emerald-600' : ''}`}>
                     {dayNames[dayDate.getDay()]} {dayDate.getDate()}
+                    {isToday && <span className="ml-1 text-xs">(Hoy)</span>}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {day.mealCount} {day.mealCount === 1 ? 'comida' : 'comidas'}
@@ -839,7 +855,7 @@ function WeeklyStats({ settings }: { settings: UserSettings }) {
                     {day.totalNetCarbs.toFixed(1)}g net
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {day.totalCalories} kcal
+                    {day.totalCalories} kcal | {day.totalFiber.toFixed(1)}g fibra
                   </p>
                 </div>
               </div>
