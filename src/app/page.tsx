@@ -20,7 +20,11 @@ import {
   Loader2,
   Key,
   ExternalLink,
-  CheckCircle
+  CheckCircle,
+  Pencil,
+  X,
+  TrendingUp,
+  Calendar
 } from 'lucide-react';
 import { MacroRing } from '@/components/keto/macro-ring';
 import { CameraCapture } from '@/components/keto/camera-capture';
@@ -49,7 +53,16 @@ interface UserSettings {
   dailyProtein: number;
   dailyFat: number;
   dailyFiber: number;
-  groqApiKey?: string;
+}
+
+interface DayStats {
+  date: string;
+  totalCalories: number;
+  totalNetCarbs: number;
+  totalProtein: number;
+  totalFat: number;
+  totalFiber: number;
+  mealCount: number;
 }
 
 // LocalStorage keys
@@ -75,10 +88,10 @@ function saveMeals(date: Date, meals: Meal[]): void {
 
 function loadSettings(): UserSettings {
   if (typeof window === 'undefined') {
-    return { dailyCalories: 2000, dailyCarbs: 20, dailyProtein: 100, dailyFat: 150, dailyFiber: 25 };
+    return { dailyCalories: 2000, dailyCarbs: 20, dailyProtein: 100, dailyFat: 150, dailyFiber: 30 };
   }
   const data = localStorage.getItem(SETTINGS_KEY);
-  return data ? JSON.parse(data) : { dailyCalories: 2000, dailyCarbs: 20, dailyProtein: 100, dailyFat: 150, dailyFiber: 25 };
+  return data ? JSON.parse(data) : { dailyCalories: 2000, dailyCarbs: 20, dailyProtein: 100, dailyFat: 150, dailyFiber: 30 };
 }
 
 function saveSettings(settings: UserSettings): void {
@@ -94,9 +107,35 @@ function saveApiKey(key: string): void {
   localStorage.setItem(API_KEY_KEY, key);
 }
 
+// Get stats for the last N days
+function getWeekStats(): DayStats[] {
+  if (typeof window === 'undefined') return [];
+  
+  const stats: DayStats[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const dateStr = date.toISOString().split('T')[0];
+    const key = `${MEALS_KEY}_${dateStr}`;
+    const data = localStorage.getItem(key);
+    const meals: Meal[] = data ? JSON.parse(data) : [];
+    
+    stats.push({
+      date: dateStr,
+      totalCalories: meals.reduce((sum, m) => sum + m.calories, 0),
+      totalNetCarbs: meals.reduce((sum, m) => sum + m.netCarbs, 0),
+      totalProtein: meals.reduce((sum, m) => sum + m.protein, 0),
+      totalFat: meals.reduce((sum, m) => sum + m.fat, 0),
+      totalFiber: meals.reduce((sum, m) => sum + m.fiber, 0),
+      mealCount: meals.length
+    });
+  }
+  return stats;
+}
+
 export default function KetoCounterApp() {
   const [meals, setMeals] = useState<Meal[]>([]);
-  const [settings, setSettings] = useState<UserSettings>({ dailyCalories: 2000, dailyCarbs: 20, dailyProtein: 100, dailyFat: 150, dailyFiber: 25 });
+  const [settings, setSettings] = useState<UserSettings>({ dailyCalories: 2000, dailyCarbs: 20, dailyProtein: 100, dailyFat: 150, dailyFiber: 30 });
   const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -107,9 +146,14 @@ export default function KetoCounterApp() {
   const [showText, setShowText] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showResult, setShowResult] = useState(false);
+  const [showWeeklyStats, setShowWeeklyStats] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [showApiKeySetup, setShowApiKeySetup] = useState(false);
+  
+  // Edit state
+  const [editingMeal, setEditingMeal] = useState<Meal | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
 
   useEffect(() => {
     const loadedSettings = loadSettings();
@@ -184,11 +228,16 @@ export default function KetoCounterApp() {
       });
       const result = await response.json();
       if (result.success && result.data?.foods?.length > 0) {
+        // Ensure netCarbs = carbs - fiber
+        result.data.foods = result.data.foods.map((f: any) => ({
+          ...f,
+          netCarbs: Math.max(0, (f.carbs || 0) - (f.fiber || 0))
+        }));
         setAnalysisResult(result.data);
         setShowResult(true);
         setShowCamera(false);
       } else {
-        alert(result.error || 'No se detectaron alimentos. Intenta con texto.');
+        alert(result.error || 'No se detectaron alimentos.');
       }
     } catch (error) {
       alert('Error al analizar la imagen.');
@@ -224,6 +273,10 @@ export default function KetoCounterApp() {
         });
         const analyzeResult = await analyzeResponse.json();
         if (analyzeResult.success && analyzeResult.data?.foods?.length > 0) {
+          analyzeResult.data.foods = analyzeResult.data.foods.map((f: any) => ({
+            ...f,
+            netCarbs: Math.max(0, (f.carbs || 0) - (f.fiber || 0))
+          }));
           setAnalysisResult(analyzeResult.data);
           setShowResult(true);
           setShowVoice(false);
@@ -257,6 +310,10 @@ export default function KetoCounterApp() {
       });
       const result = await response.json();
       if (result.success && result.data?.foods?.length > 0) {
+        result.data.foods = result.data.foods.map((f: any) => ({
+          ...f,
+          netCarbs: Math.max(0, (f.carbs || 0) - (f.fiber || 0))
+        }));
         setAnalysisResult(result.data);
         setShowResult(true);
         setShowText(false);
@@ -279,7 +336,7 @@ export default function KetoCounterApp() {
       protein: food.protein || 0,
       fat: food.fat || 0,
       fiber: food.fiber || 0,
-      netCarbs: food.netCarbs || 0,
+      netCarbs: Math.max(0, (food.carbs || 0) - (food.fiber || 0)),
       source: 'photo',
       createdAt: new Date().toISOString()
     };
@@ -296,6 +353,24 @@ export default function KetoCounterApp() {
 
   const handleDeleteMeal = (id: string) => {
     setMeals(prev => prev.filter(m => m.id !== id));
+  };
+
+  const handleEditMeal = (meal: Meal) => {
+    setEditingMeal({ ...meal });
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = () => {
+    if (editingMeal) {
+      // Recalculate netCarbs
+      const updatedMeal = {
+        ...editingMeal,
+        netCarbs: Math.max(0, editingMeal.carbs - editingMeal.fiber)
+      };
+      setMeals(prev => prev.map(m => m.id === updatedMeal.id ? updatedMeal : m));
+      setEditingMeal(null);
+      setShowEditModal(false);
+    }
   };
 
   const handleSaveSettings = (newSettings: UserSettings, newApiKey?: string) => {
@@ -328,6 +403,9 @@ export default function KetoCounterApp() {
                 <Key className="w-5 h-5" />
               </Button>
             )}
+            <Button variant="ghost" size="icon" onClick={() => setShowWeeklyStats(true)} title="Progreso semanal">
+              <TrendingUp className="w-5 h-5" />
+            </Button>
             <Button variant="ghost" size="icon" onClick={toggleDarkMode}>
               {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
             </Button>
@@ -349,14 +427,15 @@ export default function KetoCounterApp() {
 
       {/* Main */}
       <main className="flex-1 overflow-y-auto p-4 w-full box-border">
-        {/* Macros */}
+        {/* Macros - Now with Fiber */}
         <Card className="shadow-lg w-full box-border">
           <CardContent className="p-4">
-            <div className="flex items-center justify-around">
-              <MacroRing value={totals.netCarbs} max={settings.dailyCarbs} label="Net Carbs" unit="g" color="#10b981" size={80} />
-              <MacroRing value={totals.calories} max={settings.dailyCalories} label="Cal" unit="kcal" color="#f59e0b" size={70} />
-              <MacroRing value={totals.protein} max={settings.dailyProtein} label="Prot" unit="g" color="#3b82f6" size={70} />
-              <MacroRing value={totals.fat} max={settings.dailyFat} label="Grasa" unit="g" color="#8b5cf6" size={70} />
+            <div className="flex items-center justify-around flex-wrap gap-2">
+              <MacroRing value={totals.netCarbs} max={settings.dailyCarbs} label="Net Carbs" unit="g" color="#10b981" size={70} />
+              <MacroRing value={totals.calories} max={settings.dailyCalories} label="Cal" unit="kcal" color="#f59e0b" size={65} />
+              <MacroRing value={totals.protein} max={settings.dailyProtein} label="Prot" unit="g" color="#3b82f6" size={65} />
+              <MacroRing value={totals.fat} max={settings.dailyFat} label="Grasa" unit="g" color="#8b5cf6" size={65} />
+              <MacroRing value={totals.fiber} max={settings.dailyFiber} label="Fibra" unit="g" color="#14b8a6" size={65} />
             </div>
             <div className={cn(
               "mt-3 p-2 rounded-lg text-center text-sm",
@@ -367,7 +446,7 @@ export default function KetoCounterApp() {
           </CardContent>
         </Card>
 
-        {/* Stats */}
+        {/* Stats Row */}
         <div className="grid grid-cols-4 gap-2 mt-3 w-full">
           <Card className="p-2 text-center"><Wheat className="w-4 h-4 mx-auto text-yellow-500" /><p className="text-base font-bold">{totals.carbs.toFixed(0)}g</p><p className="text-[10px] text-muted-foreground">Carbs</p></Card>
           <Card className="p-2 text-center"><Droplets className="w-4 h-4 mx-auto text-purple-500" /><p className="text-base font-bold">{totals.fat.toFixed(0)}g</p><p className="text-[10px] text-muted-foreground">Grasa</p></Card>
@@ -379,23 +458,30 @@ export default function KetoCounterApp() {
         <Card className="mt-3 w-full box-border">
           <CardHeader className="pb-2 px-4">
             <CardTitle className="text-sm flex items-center gap-2">
-              <Utensils className="w-4 h-4" /> Comidas
+              <Utensils className="w-4 h-4" /> Comidas de {formatDate(currentDate)}
             </CardTitle>
           </CardHeader>
           <CardContent className="px-4 max-h-48 overflow-y-auto">
             {meals.length === 0 ? (
-              <p className="text-center text-muted-foreground py-4 text-sm">Sin comidas</p>
+              <p className="text-center text-muted-foreground py-4 text-sm">Sin comidas registradas</p>
             ) : (
               <div className="space-y-2">
                 {meals.map(meal => (
                   <div key={meal.id} className="flex items-center justify-between p-2 bg-muted/50 rounded-lg">
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0" onClick={() => handleEditMeal(meal)}>
                       <p className="font-medium text-sm truncate">{meal.name}</p>
-                      <p className="text-xs text-muted-foreground">{meal.calories.toFixed(0)} kcal | {meal.netCarbs.toFixed(1)}g net</p>
+                      <p className="text-xs text-muted-foreground">
+                        {meal.calories.toFixed(0)} kcal | {meal.netCarbs.toFixed(1)}g net | {meal.fiber.toFixed(1)}g fibra
+                      </p>
                     </div>
-                    <Button variant="ghost" size="icon" onClick={() => handleDeleteMeal(meal.id)}>
-                      <Trash2 className="w-4 h-4 text-red-500" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => handleEditMeal(meal)}>
+                        <Pencil className="w-4 h-4 text-blue-500" />
+                      </Button>
+                      <Button variant="ghost" size="icon" onClick={() => handleDeleteMeal(meal.id)}>
+                        <Trash2 className="w-4 h-4 text-red-500" />
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -423,6 +509,112 @@ export default function KetoCounterApp() {
       {showCamera && <CameraCapture onCapture={handlePhotoCapture} onClose={() => setShowCamera(false)} isAnalyzing={isAnalyzing} />}
       {showVoice && <VoiceInput onTranscript={handleVoiceTranscript} onClose={() => setShowVoice(false)} isProcessing={isAnalyzing} />}
       {showText && <TextInputModal onAnalyze={handleTextAnalyze} onClose={() => setShowText(false)} isProcessing={isAnalyzing} />}
+      
+      {/* Edit Meal Modal */}
+      {showEditModal && editingMeal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <Card className="w-full max-w-sm max-h-[90vh] overflow-y-auto">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center justify-between">
+                Editar Comida
+                <Button variant="ghost" size="icon" onClick={() => setShowEditModal(false)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div>
+                <label className="text-xs">Nombre</label>
+                <input 
+                  type="text" 
+                  className="w-full border rounded p-2 mt-1 bg-background text-sm"
+                  value={editingMeal.name}
+                  onChange={e => setEditingMeal(prev => prev ? { ...prev, name: e.target.value } : null)}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs">Calorías</label>
+                  <input 
+                    type="number" 
+                    className="w-full border rounded p-2 mt-1 bg-background text-sm"
+                    value={editingMeal.calories}
+                    onChange={e => setEditingMeal(prev => prev ? { ...prev, calories: Number(e.target.value) } : null)}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs">Carbohidratos (g)</label>
+                  <input 
+                    type="number" 
+                    step="0.1"
+                    className="w-full border rounded p-2 mt-1 bg-background text-sm"
+                    value={editingMeal.carbs}
+                    onChange={e => setEditingMeal(prev => prev ? { ...prev, carbs: Number(e.target.value) } : null)}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs">Proteína (g)</label>
+                  <input 
+                    type="number" 
+                    step="0.1"
+                    className="w-full border rounded p-2 mt-1 bg-background text-sm"
+                    value={editingMeal.protein}
+                    onChange={e => setEditingMeal(prev => prev ? { ...prev, protein: Number(e.target.value) } : null)}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs">Grasa (g)</label>
+                  <input 
+                    type="number" 
+                    step="0.1"
+                    className="w-full border rounded p-2 mt-1 bg-background text-sm"
+                    value={editingMeal.fat}
+                    onChange={e => setEditingMeal(prev => prev ? { ...prev, fat: Number(e.target.value) } : null)}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs">Fibra (g)</label>
+                  <input 
+                    type="number" 
+                    step="0.1"
+                    className="w-full border rounded p-2 mt-1 bg-background text-sm"
+                    value={editingMeal.fiber}
+                    onChange={e => setEditingMeal(prev => prev ? { ...prev, fiber: Number(e.target.value) } : null)}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs">Net Carbs (g)</label>
+                  <div className="w-full border rounded p-2 mt-1 bg-muted text-sm">
+                    {Math.max(0, editingMeal.carbs - editingMeal.fiber).toFixed(1)}
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button className="flex-1" onClick={handleSaveEdit}>Guardar</Button>
+                <Button variant="outline" className="flex-1" onClick={() => setShowEditModal(false)}>Cancelar</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+      
+      {/* Weekly Stats Modal */}
+      {showWeeklyStats && (
+        <div className="fixed inset-0 z-50 bg-background flex flex-col">
+          <div className="flex items-center justify-between p-4 border-b">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-emerald-500" />
+              Progreso Semanal
+            </h2>
+            <Button variant="ghost" size="icon" onClick={() => setShowWeeklyStats(false)}>
+              <X className="w-5 h-5" />
+            </Button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4">
+            <WeeklyStats settings={settings} />
+          </div>
+        </div>
+      )}
       
       {/* API Key Setup Modal */}
       {showApiKeySetup && (
@@ -492,9 +684,6 @@ export default function KetoCounterApp() {
                   value={apiKey}
                   onChange={e => setApiKey(e.target.value)}
                 />
-                <p className="text-[10px] text-muted-foreground mt-1">
-                  Consigue tu key gratis en console.groq.com
-                </p>
               </div>
               <hr className="my-2" />
               <div>
@@ -513,6 +702,10 @@ export default function KetoCounterApp() {
                 <label className="text-xs">Grasa (g)</label>
                 <input type="number" className="w-full border rounded p-2 mt-1 bg-background text-sm" value={settings.dailyFat} onChange={e => setSettings(s => ({ ...s, dailyFat: Number(e.target.value) }))} />
               </div>
+              <div>
+                <label className="text-xs">Fibra diaria (g)</label>
+                <input type="number" className="w-full border rounded p-2 mt-1 bg-background text-sm" value={settings.dailyFiber} onChange={e => setSettings(s => ({ ...s, dailyFiber: Number(e.target.value) }))} />
+              </div>
               <div className="flex gap-2 pt-2">
                 <Button className="flex-1" onClick={() => handleSaveSettings(settings, apiKey)}>Guardar</Button>
                 <Button variant="outline" className="flex-1" onClick={() => setShowSettings(false)}>Cancelar</Button>
@@ -530,6 +723,130 @@ export default function KetoCounterApp() {
           onClose={() => { setShowResult(false); setAnalysisResult(null); }}
         />
       )}
+    </div>
+  );
+}
+
+// Weekly Stats Component
+function WeeklyStats({ settings }: { settings: UserSettings }) {
+  const [stats, setStats] = useState<DayStats[]>([]);
+  
+  useEffect(() => {
+    setStats(getWeekStats());
+  }, []);
+  
+  const avgNetCarbs = stats.length > 0 
+    ? (stats.reduce((sum, s) => sum + s.totalNetCarbs, 0) / stats.length).toFixed(1)
+    : '0';
+  
+  const avgCalories = stats.length > 0 
+    ? Math.round(stats.reduce((sum, s) => sum + s.totalCalories, 0) / stats.length)
+    : 0;
+  
+  const ketoDays = stats.filter(s => s.totalNetCarbs <= settings.dailyCarbs && s.mealCount > 0).length;
+  
+  const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+  
+  return (
+    <div className="space-y-4">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-3 gap-2">
+        <Card className="p-3 text-center">
+          <p className="text-2xl font-bold text-emerald-500">{avgNetCarbs}g</p>
+          <p className="text-[10px] text-muted-foreground">Promedio Net Carbs</p>
+        </Card>
+        <Card className="p-3 text-center">
+          <p className="text-2xl font-bold text-orange-500">{avgCalories}</p>
+          <p className="text-[10px] text-muted-foreground">Promedio Calorías</p>
+        </Card>
+        <Card className="p-3 text-center">
+          <p className="text-2xl font-bold text-blue-500">{ketoDays}/7</p>
+          <p className="text-[10px] text-muted-foreground">Días en Cetosis</p>
+        </Card>
+      </div>
+      
+      {/* Bar Chart */}
+      <Card className="p-4">
+        <h3 className="text-sm font-medium mb-3">Net Carbs por Día</h3>
+        <div className="flex items-end justify-between gap-1 h-32">
+          {stats.map((day, index) => {
+            const height = Math.min((day.totalNetCarbs / settings.dailyCarbs) * 100, 100);
+            const dayDate = new Date(day.date);
+            const isToday = day.date === new Date().toISOString().split('T')[0];
+            const isKeto = day.totalNetCarbs <= settings.dailyCarbs;
+            
+            return (
+              <div key={index} className="flex flex-col items-center flex-1">
+                <div className="w-full flex flex-col items-center justify-end h-24">
+                  {day.mealCount > 0 ? (
+                    <div 
+                      className={`w-full max-w-[30px] rounded-t transition-all ${isKeto ? 'bg-emerald-500' : 'bg-red-500'}`}
+                      style={{ height: `${Math.max(height, 5)}%` }}
+                    />
+                  ) : (
+                    <div className="w-full max-w-[30px] h-1 bg-muted rounded" />
+                  )}
+                </div>
+                <p className={`text-[10px] mt-1 ${isToday ? 'font-bold text-emerald-500' : 'text-muted-foreground'}`}>
+                  {dayNames[dayDate.getDay()]}
+                </p>
+                <p className="text-[9px] text-muted-foreground">
+                  {day.totalNetCarbs.toFixed(0)}g
+                </p>
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex items-center justify-center gap-4 mt-3 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1">
+            <div className="w-3 h-3 bg-emerald-500 rounded" />
+            <span>En cetosis</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-3 h-3 bg-red-500 rounded" />
+            <span>Excedido</span>
+          </div>
+        </div>
+      </Card>
+      
+      {/* Daily Details */}
+      <Card className="p-4">
+        <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
+          <Calendar className="w-4 h-4" />
+          Detalle por Día
+        </h3>
+        <div className="space-y-2">
+          {stats.slice().reverse().map((day, index) => {
+            const dayDate = new Date(day.date);
+            const isToday = day.date === new Date().toISOString().split('T')[0];
+            const isKeto = day.totalNetCarbs <= settings.dailyCarbs;
+            
+            return (
+              <div 
+                key={index} 
+                className={`flex items-center justify-between p-2 rounded-lg ${isToday ? 'bg-emerald-50 dark:bg-emerald-900/20' : 'bg-muted/50'}`}
+              >
+                <div>
+                  <p className={`text-sm font-medium ${isToday ? 'text-emerald-600' : ''}`}>
+                    {dayNames[dayDate.getDay()]} {dayDate.getDate()}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {day.mealCount} {day.mealCount === 1 ? 'comida' : 'comidas'}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className={`text-sm font-bold ${isKeto ? 'text-emerald-500' : 'text-red-500'}`}>
+                    {day.totalNetCarbs.toFixed(1)}g net
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {day.totalCalories} kcal
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
     </div>
   );
 }

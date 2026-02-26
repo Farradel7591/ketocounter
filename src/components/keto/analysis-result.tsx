@@ -3,7 +3,7 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle, AlertTriangle, XCircle, Plus, X, Flame, Wheat, Droplets } from 'lucide-react';
+import { CheckCircle, AlertTriangle, XCircle, Plus, X, Flame, Wheat, Droplets, Leaf } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface Food {
@@ -16,8 +16,6 @@ interface Food {
   netCarbs: number;
   servingSize: number;
   unit: string;
-  isKetoFriendly?: boolean;
-  ketoNotes?: string;
 }
 
 interface AnalysisResultProps {
@@ -31,8 +29,6 @@ interface AnalysisResultProps {
       fiber: number;
       netCarbs: number;
     };
-    overallKetoScore?: number;
-    recommendations?: string[];
   };
   onAddFood: (food: Food) => void;
   onAddAll: () => void;
@@ -90,46 +86,56 @@ export function AnalysisResult({ data, onAddFood, onAddAll, onClose }: AnalysisR
           )}
         </div>
 
-        {/* Total Nutrition Card */}
+        {/* Total Nutrition Card - Now with Fiber */}
         <Card className="mb-4 shadow-sm">
           <CardHeader className="pb-2 pt-4">
             <CardTitle className="text-sm font-medium text-muted-foreground">Total Estimado</CardTitle>
           </CardHeader>
           <CardContent className="pb-4">
-            <div className="grid grid-cols-4 gap-2 text-center">
+            <div className="grid grid-cols-5 gap-1 text-center">
               <div className="space-y-1">
-                <div className="w-10 h-10 rounded-full bg-orange-500/10 flex items-center justify-center mx-auto">
-                  <Flame className="w-5 h-5 text-orange-500" />
+                <div className="w-9 h-9 rounded-full bg-orange-500/10 flex items-center justify-center mx-auto">
+                  <Flame className="w-4 h-4 text-orange-500" />
                 </div>
-                <p className="text-xl font-bold">{totalNutrition.calories.toFixed(0)}</p>
-                <p className="text-[10px] text-muted-foreground">kcal</p>
+                <p className="text-lg font-bold">{totalNutrition.calories.toFixed(0)}</p>
+                <p className="text-[9px] text-muted-foreground">kcal</p>
               </div>
               <div className="space-y-1">
-                <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto">
-                  <Wheat className="w-5 h-5 text-emerald-500" />
+                <div className="w-9 h-9 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto">
+                  <Wheat className="w-4 h-4 text-emerald-500" />
                 </div>
                 <p className={cn(
-                  "text-xl font-bold",
+                  "text-lg font-bold",
                   totalNutrition.netCarbs > 20 ? "text-red-500" : "text-emerald-600"
                 )}>
                   {totalNutrition.netCarbs.toFixed(1)}g
                 </p>
-                <p className="text-[10px] text-muted-foreground">net carbs</p>
+                <p className="text-[9px] text-muted-foreground">net carbs</p>
               </div>
               <div className="space-y-1">
-                <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center mx-auto">
-                  <Droplets className="w-5 h-5 text-blue-500" />
+                <div className="w-9 h-9 rounded-full bg-teal-500/10 flex items-center justify-center mx-auto">
+                  <Leaf className="w-4 h-4 text-teal-500" />
                 </div>
-                <p className="text-xl font-bold">{totalNutrition.protein.toFixed(0)}g</p>
-                <p className="text-[10px] text-muted-foreground">proteína</p>
+                <p className="text-lg font-bold text-teal-600">{totalNutrition.fiber.toFixed(1)}g</p>
+                <p className="text-[9px] text-muted-foreground">fibra</p>
               </div>
               <div className="space-y-1">
-                <div className="w-10 h-10 rounded-full bg-purple-500/10 flex items-center justify-center mx-auto">
-                  <Droplets className="w-5 h-5 text-purple-500" />
+                <div className="w-9 h-9 rounded-full bg-blue-500/10 flex items-center justify-center mx-auto">
+                  <Droplets className="w-4 h-4 text-blue-500" />
                 </div>
-                <p className="text-xl font-bold">{totalNutrition.fat.toFixed(0)}g</p>
-                <p className="text-[10px] text-muted-foreground">grasa</p>
+                <p className="text-lg font-bold">{totalNutrition.protein.toFixed(0)}g</p>
+                <p className="text-[9px] text-muted-foreground">proteína</p>
               </div>
+              <div className="space-y-1">
+                <div className="w-9 h-9 rounded-full bg-purple-500/10 flex items-center justify-center mx-auto">
+                  <Droplets className="w-4 h-4 text-purple-500" />
+                </div>
+                <p className="text-lg font-bold">{totalNutrition.fat.toFixed(0)}g</p>
+                <p className="text-[9px] text-muted-foreground">grasa</p>
+              </div>
+            </div>
+            <div className="mt-3 p-2 bg-muted/50 rounded-lg text-center text-xs text-muted-foreground">
+              Net Carbs = Carbohidratos ({(totalNutrition.netCarbs + totalNutrition.fiber).toFixed(1)}g) - Fibra ({totalNutrition.fiber.toFixed(1)}g)
             </div>
           </CardContent>
         </Card>
@@ -177,6 +183,9 @@ export function AnalysisResult({ data, onAddFood, onAddAll, onClose }: AnalysisR
                         </Badge>
                         <Badge variant="secondary" className="text-[10px] px-2">
                           {food.netCarbs.toFixed(1)}g net
+                        </Badge>
+                        <Badge variant="secondary" className="text-[10px] px-2 bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400">
+                          {food.fiber.toFixed(1)}g fibra
                         </Badge>
                         <Badge variant="secondary" className="text-[10px] px-2">
                           P: {food.protein.toFixed(0)}g

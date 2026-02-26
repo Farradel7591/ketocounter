@@ -11,6 +11,79 @@ interface CameraCaptureProps {
   isAnalyzing: boolean;
 }
 
+// Compress and convert image to JPEG
+async function processImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      img.src = e.target?.result as string;
+    };
+    
+    img.onload = () => {
+      // Max dimensions for API
+      const MAX_WIDTH = 1024;
+      const MAX_HEIGHT = 1024;
+      
+      let width = img.width;
+      let height = img.height;
+      
+      // Calculate new dimensions
+      if (width > height) {
+        if (width > MAX_WIDTH) {
+          height = Math.round((height * MAX_WIDTH) / width);
+          width = MAX_WIDTH;
+        }
+      } else {
+        if (height > MAX_HEIGHT) {
+          width = Math.round((width * MAX_HEIGHT) / height);
+          height = MAX_HEIGHT;
+        }
+      }
+      
+      // Create canvas and resize
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Could not get canvas context'));
+        return;
+      }
+      
+      // Draw resized image
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      // Convert to JPEG with compression (0.7 quality = ~70% compression)
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+      
+      // Check final size (max ~500KB for API)
+      const base64Length = dataUrl.length - 'data:image/jpeg;base64,'.length;
+      const sizeInKB = Math.round((base64Length * 3) / 4 / 1024);
+      
+      if (sizeInKB > 500) {
+        // Re-compress with lower quality
+        const lowerQuality = canvas.toDataURL('image/jpeg', 0.5);
+        resolve(lowerQuality);
+      } else {
+        resolve(dataUrl);
+      }
+    };
+    
+    img.onerror = () => {
+      reject(new Error('Failed to load image'));
+    };
+    
+    reader.onerror = () => {
+      reject(new Error('Failed to read file'));
+    };
+    
+    reader.readAsDataURL(file);
+  });
+}
+
 export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -20,6 +93,7 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
 
   // Start camera when facing mode changes
   useEffect(() => {
@@ -28,7 +102,6 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
     async function initCamera() {
       try {
         setIsLoading(true);
-        // Stop previous stream
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(track => track.stop());
         }
@@ -80,42 +153,61 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
       const video = videoRef.current;
       const canvas = canvasRef.current;
       
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      // Limit capture size
+      const maxSize = 1024;
+      let width = video.videoWidth;
+      let height = video.videoHeight;
+      
+      if (width > height && width > maxSize) {
+        height = Math.round((height * maxSize) / width);
+        width = maxSize;
+      } else if (height > maxSize) {
+        width = Math.round((width * maxSize) / height);
+        height = maxSize;
+      }
+      
+      canvas.width = width;
+      canvas.height = height;
       
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.drawImage(video, 0, 0);
-        const imageBase64 = canvas.toDataURL('image/jpeg', 0.8);
+        ctx.drawImage(video, 0, 0, width, height);
+        const imageBase64 = canvas.toDataURL('image/jpeg', 0.7);
         setCapturedImage(imageBase64);
       }
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      // Validate file type
-      if (!file.type.startsWith('image/')) {
-        alert('Por favor selecciona una imagen válida');
-        return;
-      }
-      
-      // Validate file size (max 10MB)
-      if (file.size > 10 * 1024 * 1024) {
-        alert('La imagen es muy grande. Máximo 10MB.');
-        return;
-      }
-      
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const base64 = event.target?.result as string;
-        setCapturedImage(base64);
-      };
-      reader.onerror = () => {
-        alert('Error al leer la imagen');
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    
+    // Validate file type (accept HEIC too)
+    const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif'];
+    const isHeic = file.name.toLowerCase().endsWith('.heic') || file.name.toLowerCase().endsWith('.heif');
+    
+    if (!validTypes.includes(file.type) && !isHeic) {
+      alert('Por favor selecciona una imagen válida (JPG, PNG, HEIC)');
+      return;
+    }
+    
+    // Check file size (max 50MB for original)
+    if (file.size > 50 * 1024 * 1024) {
+      alert('La imagen es muy grande. Intenta con una más pequeña.');
+      return;
+    }
+    
+    setIsProcessingImage(true);
+    
+    try {
+      // Process and compress image
+      const processedImage = await processImage(file);
+      setCapturedImage(processedImage);
+    } catch (error) {
+      console.error('Error processing image:', error);
+      alert('Error al procesar la imagen. Intenta con otra foto.');
+    } finally {
+      setIsProcessingImage(false);
     }
   };
 
@@ -127,7 +219,6 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
 
   const retake = () => {
     setCapturedImage(null);
-    // Reset file input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -146,9 +237,19 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
             <Button 
               onClick={() => fileInputRef.current?.click()}
               className="w-full gap-2"
+              disabled={isProcessingImage}
             >
-              <ImageIcon className="w-4 h-4" />
-              Subir Foto
+              {isProcessingImage ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Procesando...
+                </>
+              ) : (
+                <>
+                  <ImageIcon className="w-4 h-4" />
+                  Subir Foto
+                </>
+              )}
             </Button>
             <Button variant="outline" onClick={onClose} className="w-full">
               Cerrar
@@ -157,13 +258,12 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/*,.heic,.heif"
             onChange={handleFileUpload}
             className="hidden"
           />
         </div>
         
-        {/* Show uploaded image preview */}
         {capturedImage && (
           <div className="fixed inset-0 z-50 bg-black">
             <img 
@@ -191,7 +291,7 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
                 <Button
                   size="lg"
                   onClick={confirmCapture}
-                  className="rounded-full px-8 bg-green-600 hover:bg-green-700"
+                  className="rounded-full px-8 bg-emerald-600 hover:bg-emerald-700"
                   disabled={isAnalyzing}
                 >
                   {isAnalyzing ? (
@@ -214,11 +314,11 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
   return (
     <div className="fixed inset-0 z-50 bg-black">
       {/* Loading indicator */}
-      {isLoading && !capturedImage && (
+      {(isLoading || isProcessingImage) && !capturedImage && (
         <div className="absolute inset-0 flex items-center justify-center bg-black z-10">
           <div className="text-white text-center">
             <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />
-            <p className="text-sm">Iniciando cámara...</p>
+            <p className="text-sm">{isProcessingImage ? 'Procesando imagen...' : 'Iniciando cámara...'}</p>
           </div>
         </div>
       )}
@@ -298,7 +398,7 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,.heic,.heif"
               onChange={handleFileUpload}
               className="hidden"
             />
@@ -325,8 +425,8 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
       
       {/* Hint text */}
       {!capturedImage && (
-        <p className="absolute bottom-28 left-0 right-0 text-center text-white/60 text-xs">
-          Toma una foto o súbelas desde tu galería
+        <p className="absolute bottom-28 left-0 right-0 text-center text-white/60 text-xs px-4">
+          Toma una foto o súbelas desde tu galería (soporta HEIC)
         </p>
       )}
     </div>
