@@ -28,6 +28,7 @@
     "z-ai-web-dev-sdk": "0.0.16"
   },
   "devDependencies": {
+    "@netlify/plugin-nextjs": "^5.15.8",
     "@types/node": "20.12.7",
     "@types/react": "18.3.1",
     "@types/react-dom": "18.3.0",
