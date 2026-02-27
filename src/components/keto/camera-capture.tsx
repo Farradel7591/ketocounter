@@ -2,8 +2,17 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Camera, X, SwitchCamera, Loader2, Upload, Image as ImageIcon, AlertCircle, CheckCircle, CameraOff } from 'lucide-react';
+import { Camera, X, SwitchCamera, Loader2, Upload, Image as ImageIcon, AlertCircle, CheckCircle, CameraOff, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+// Detect iOS Safari
+function isIosSafari(): boolean {
+  if (typeof window === 'undefined') return false;
+  const ua = navigator.userAgent;
+  const isIOS = /iPad|iPhone|iPod/.test(ua);
+  const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS/.test(ua);
+  return isIOS && isSafari;
+}
 
 interface CameraCaptureProps {
   onCapture: (imageBase64: string) => void;
@@ -28,7 +37,7 @@ function isHeicFile(file: File): boolean {
 // Convert HEIC to JPEG using heic2any
 async function convertHeicToJpeg(file: File): Promise<Blob> {
   try {
-    const heic2anyModule = await import('heic2any');
+    const heic2anyModule = await import('heic2any') as any;
     const heic2any = heic2anyModule.default || heic2anyModule;
     
     const result = await heic2any({
@@ -152,6 +161,8 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
   const [isProcessingImage, setIsProcessingImage] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showHeicError, setShowHeicError] = useState(false);
+  const [showIosHeicWarning, setShowIosHeicWarning] = useState(false);
+  const [pendingHeicFile, setPendingHeicFile] = useState<File | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -222,7 +233,23 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
     
     setErrorMsg(null);
     setShowHeicError(false);
+    
+    // Check if HEIC on iOS Safari - show warning first
+    const isHeic = isHeicFile(file);
+    if (isHeic && isIosSafari()) {
+      setPendingHeicFile(file);
+      setShowIosHeicWarning(true);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+    
+    await processFile(file);
+  }, []);
+  
+  const processFile = useCallback(async (file: File) => {
     setIsProcessingImage(true);
+    setShowIosHeicWarning(false);
+    setPendingHeicFile(null);
     
     try {
       const processed = await processImage(file);
@@ -239,6 +266,17 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }, []);
+  
+  const handleHeicWarningContinue = useCallback(() => {
+    if (pendingHeicFile) {
+      processFile(pendingHeicFile);
+    }
+  }, [pendingHeicFile, processFile]);
+  
+  const handleHeicWarningCancel = useCallback(() => {
+    setShowIosHeicWarning(false);
+    setPendingHeicFile(null);
+  }, []);
 
   const confirmCapture = useCallback(() => {
     if (capturedImage) onCapture(capturedImage);
@@ -250,6 +288,49 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
     setShowHeicError(false);
   }, []);
 
+  // iOS HEIC Warning Modal - Shows BEFORE attempting conversion
+  if (showIosHeicWarning && !capturedImage) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black flex items-center justify-center p-6">
+        <div className="bg-card rounded-2xl p-6 max-w-sm w-full text-center space-y-4">
+          <div className="w-16 h-16 rounded-full bg-blue-500/20 flex items-center justify-center mx-auto">
+            <Info className="w-8 h-8 text-blue-500" />
+          </div>
+          
+          <h3 className="text-lg font-bold">Foto en formato HEIC</h3>
+          
+          <p className="text-sm text-muted-foreground">
+            Esta foto está en formato HEIC. En Safari iOS la conversión puede fallar.
+          </p>
+          
+          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 text-left space-y-2">
+            <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-2">
+              <CheckCircle className="w-4 h-4" />
+              Recomendación
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Usa el <strong>botón blanco grande</strong> de la cámara para tomar fotos directamente. Se guardan en JPEG y funcionan siempre.
+            </p>
+          </div>
+          
+          <div className="flex flex-col gap-2 pt-2">
+            <Button onClick={handleHeicWarningContinue} variant="outline" className="w-full gap-2">
+              <Loader2 className="w-4 h-4" />
+              Intentar convertir
+            </Button>
+            <Button onClick={retake} className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700">
+              <Camera className="w-4 h-4" />
+              Usar Cámara
+            </Button>
+            <Button variant="ghost" onClick={handleHeicWarningCancel} className="w-full">
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
   // HEIC Error Modal - Shows when HEIC can't be converted
   if (showHeicError && !capturedImage) {
     return (
@@ -259,10 +340,10 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
             <AlertCircle className="w-8 h-8 text-amber-500" />
           </div>
           
-          <h3 className="text-lg font-bold">Formato HEIC</h3>
+          <h3 className="text-lg font-bold">No se pudo convertir</h3>
           
           <p className="text-sm text-muted-foreground">
-            Tu iPhone guarda fotos en formato HEIC que no es compatible con navegadores web.
+            Safari iOS no puede convertir fotos HEIC. Pero tienes opciones:
           </p>
           
           <div className="bg-muted/50 rounded-xl p-4 text-left space-y-3">
@@ -270,20 +351,20 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
               <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center shrink-0 text-white text-xs font-bold">1</div>
               <div>
                 <p className="text-sm font-medium">Usa la cámara de la app</p>
-                <p className="text-xs text-muted-foreground">El botón blanco grande captura directamente en JPEG</p>
+                <p className="text-xs text-muted-foreground">El botón blanco grande captura en JPEG</p>
               </div>
             </div>
             <div className="flex gap-3">
               <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center shrink-0 text-white text-xs font-bold">2</div>
               <div>
-                <p className="text-sm font-medium">Cambia tu iPhone</p>
+                <p className="text-sm font-medium">Configura tu iPhone</p>
                 <p className="text-xs text-muted-foreground">Ajustes → Cámara → Formatos → Compatible</p>
               </div>
             </div>
           </div>
           
           <div className="flex flex-col gap-2 pt-2">
-            <Button onClick={retake} className="w-full gap-2">
+            <Button onClick={retake} className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700">
               <Camera className="w-4 h-4" />
               Usar Cámara
             </Button>
