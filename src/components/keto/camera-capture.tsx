@@ -5,6 +5,12 @@ import { Button } from '@/components/ui/button';
 import { Camera, X, SwitchCamera, Loader2, Upload, Image as ImageIcon, AlertCircle, CheckCircle, CameraOff, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+interface CameraCaptureProps {
+  onCapture: (imageBase64: string) => void;
+  onClose: () => void;
+  isAnalyzing: boolean;
+}
+
 // Detect iOS Safari
 function isIosSafari(): boolean {
   if (typeof window === 'undefined') return false;
@@ -12,12 +18,6 @@ function isIosSafari(): boolean {
   const isIOS = /iPad|iPhone|iPod/.test(ua);
   const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS/.test(ua);
   return isIOS && isSafari;
-}
-
-interface CameraCaptureProps {
-  onCapture: (imageBase64: string) => void;
-  onClose: () => void;
-  isAnalyzing: boolean;
 }
 
 // Check if file is HEIC/HEIF
@@ -29,45 +29,28 @@ function isHeicFile(file: File): boolean {
     fileName.endsWith('.heif') ||
     mimeType === 'image/heic' ||
     mimeType === 'image/heif' ||
-    mimeType === 'image/heic-sequence' ||
     (mimeType === '' && (fileName.endsWith('.heic') || fileName.endsWith('.heif')))
   );
 }
 
 // Convert HEIC to JPEG using heic2any
 async function convertHeicToJpeg(file: File): Promise<Blob> {
-  try {
-    const heic2anyModule = await import('heic2any') as any;
-    const heic2any = heic2anyModule.default || heic2anyModule;
-    
-    const result = await heic2any({
-      blob: file,
-      toType: 'image/jpeg',
-      quality: 0.6,
-      multiple: false
-    });
-    
-    return result as Blob;
-  } catch (error: any) {
-    console.error('HEIC conversion failed:', error);
-    throw new Error('HEIC_CONVERSION_FAILED');
-  }
+  const heic2anyModule = await import('heic2any') as any;
+  const heic2any = heic2anyModule.default || heic2anyModule;
+  const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.6, multiple: false });
+  return result as Blob;
 }
 
 // Process and compress image
 async function processImage(file: File): Promise<string> {
   return new Promise(async (resolve, reject) => {
     const isHeic = isHeicFile(file);
-    console.log('Processing file:', { name: file.name, type: file.type, sizeMB: (file.size / 1024 / 1024).toFixed(2), isHeic });
     
     if (isHeic) {
       try {
-        console.log('Attempting HEIC conversion...');
         const converted = await convertHeicToJpeg(file);
-        console.log('HEIC converted successfully, size:', (converted.size / 1024).toFixed(0), 'KB');
         processBlob(converted, resolve, reject);
-      } catch (error: any) {
-        console.error('HEIC conversion failed');
+      } catch {
         reject(new Error('HEIC_NOT_SUPPORTED'));
         return;
       }
@@ -77,7 +60,7 @@ async function processImage(file: File): Promise<string> {
   });
 }
 
-// Helper to process blob into compressed image
+// Process blob into compressed JPEG
 function processBlob(blob: Blob, resolve: (value: string) => void, reject: (reason: any) => void) {
   const img = new Image();
   const url = URL.createObjectURL(blob);
@@ -90,20 +73,18 @@ function processBlob(blob: Blob, resolve: (value: string) => void, reject: (reas
       return;
     }
     
+    // Resize to max 800px
     const MAX_SIZE = 800;
-    const MAX_FILE_KB = 180;
-    
     let width = img.width;
     let height = img.height;
-    const pixels = width * height;
     
-    let scale = Math.min(MAX_SIZE / width, MAX_SIZE / height, 1);
-    if (pixels > 5000000) scale = Math.min(scale, 0.4);
-    
-    width = Math.round(width * scale);
-    height = Math.round(height * scale);
-    
-    console.log(`Image: ${img.width}x${img.height} -> ${width}x${height}`);
+    if (width > height && width > MAX_SIZE) {
+      height = Math.round((height * MAX_SIZE) / width);
+      width = MAX_SIZE;
+    } else if (height > MAX_SIZE) {
+      width = Math.round((width * MAX_SIZE) / height);
+      height = MAX_SIZE;
+    }
     
     const canvas = document.createElement('canvas');
     canvas.width = width;
@@ -119,17 +100,17 @@ function processBlob(blob: Blob, resolve: (value: string) => void, reject: (reas
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, 0, 0, width, height);
     
+    // Compress to ~180KB
     let quality = 0.6;
     let dataUrl = canvas.toDataURL('image/jpeg', quality);
     let sizeKB = Math.round((dataUrl.length * 3) / 4 / 1024);
     
-    while (sizeKB > MAX_FILE_KB && quality > 0.15) {
+    while (sizeKB > 180 && quality > 0.15) {
       quality -= 0.1;
       dataUrl = canvas.toDataURL('image/jpeg', quality);
       sizeKB = Math.round((dataUrl.length * 3) / 4 / 1024);
     }
     
-    console.log(`Final: ${width}x${height}, ${sizeKB}KB, quality=${quality.toFixed(1)}`);
     resolve(dataUrl);
   };
   
@@ -156,7 +137,6 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
   const [showHeicError, setShowHeicError] = useState(false);
   const [showIosHeicWarning, setShowIosHeicWarning] = useState(false);
   const [pendingHeicFile, setPendingHeicFile] = useState<File | null>(null);
-  const [initError, setInitError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -165,18 +145,15 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
     async function initCamera() {
       try {
         setIsLoading(true);
-        setInitError(null);
         streamRef.current?.getTracks().forEach(t => t.stop());
         
-        // Timeout for camera init
+        // 8 second timeout
         timeoutId = setTimeout(() => {
           if (mounted && isLoading) {
-            console.log('Camera init timeout');
-            setInitError('La cámara tardó mucho en iniciar. Puedes subir una foto en su lugar.');
             setHasPermission(false);
             setIsLoading(false);
           }
-        }, 10000);
+        }, 8000);
         
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } }
@@ -193,12 +170,10 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
         if (videoRef.current) videoRef.current.srcObject = stream;
         setHasPermission(true);
         setIsLoading(false);
-      } catch (err: any) {
+      } catch {
         clearTimeout(timeoutId);
-        console.error('Camera init error:', err);
         if (mounted) {
           setHasPermission(false);
-          setInitError(err.message || 'No se pudo acceder a la cámara');
           setIsLoading(false);
         }
       }
@@ -252,8 +227,7 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
     setErrorMsg(null);
     setShowHeicError(false);
     
-    const isHeic = isHeicFile(file);
-    if (isHeic && isIosSafari()) {
+    if (isHeicFile(file) && isIosSafari()) {
       setPendingHeicFile(file);
       setShowIosHeicWarning(true);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -272,7 +246,6 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
       const processed = await processImage(file);
       setCapturedImage(processed);
     } catch (error: any) {
-      console.error('Processing error:', error.message);
       if (error.message === 'HEIC_NOT_SUPPORTED') {
         setShowHeicError(true);
       } else {
@@ -284,17 +257,6 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
     }
   }, []);
   
-  const handleHeicWarningContinue = useCallback(() => {
-    if (pendingHeicFile) {
-      processFile(pendingHeicFile);
-    }
-  }, [pendingHeicFile, processFile]);
-  
-  const handleHeicWarningCancel = useCallback(() => {
-    setShowIosHeicWarning(false);
-    setPendingHeicFile(null);
-  }, []);
-
   const confirmCapture = useCallback(() => {
     if (capturedImage) onCapture(capturedImage);
   }, [capturedImage, onCapture]);
@@ -303,6 +265,8 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
     setCapturedImage(null);
     setErrorMsg(null);
     setShowHeicError(false);
+    setShowIosHeicWarning(false);
+    setPendingHeicFile(null);
   }, []);
 
   // iOS HEIC Warning Modal
@@ -315,19 +279,10 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
           </div>
           <h3 className="text-lg font-bold">Foto en formato HEIC</h3>
           <p className="text-sm text-muted-foreground">
-            Esta foto está en formato HEIC. En Safari iOS la conversión puede fallar.
+            Safari iOS no siempre puede convertir HEIC. Recomiendo usar la cámara de la app.
           </p>
-          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 text-left space-y-2">
-            <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-2">
-              <CheckCircle className="w-4 h-4" />
-              Recomendación
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Usa el <strong>botón blanco grande</strong> de la cámara para tomar fotos directamente.
-            </p>
-          </div>
           <div className="flex flex-col gap-2 pt-2">
-            <Button onClick={handleHeicWarningContinue} variant="outline" className="w-full gap-2">
+            <Button onClick={() => pendingHeicFile && processFile(pendingHeicFile)} variant="outline" className="w-full gap-2">
               <Loader2 className="w-4 h-4" />
               Intentar convertir
             </Button>
@@ -335,7 +290,7 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
               <Camera className="w-4 h-4" />
               Usar Cámara
             </Button>
-            <Button variant="ghost" onClick={handleHeicWarningCancel} className="w-full">
+            <Button variant="ghost" onClick={() => { setShowIosHeicWarning(false); setPendingHeicFile(null); }} className="w-full">
               Cancelar
             </Button>
           </div>
@@ -353,65 +308,37 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
             <AlertCircle className="w-8 h-8 text-amber-500" />
           </div>
           <h3 className="text-lg font-bold">No se pudo convertir</h3>
-          <p className="text-sm text-muted-foreground">
-            Safari iOS no puede convertir fotos HEIC. Pero tienes opciones:
-          </p>
-          <div className="bg-muted/50 rounded-xl p-4 text-left space-y-3">
-            <div className="flex gap-3">
-              <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center shrink-0 text-white text-xs font-bold">1</div>
-              <div>
-                <p className="text-sm font-medium">Usa la cámara de la app</p>
-                <p className="text-xs text-muted-foreground">El botón blanco grande captura en JPEG</p>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center shrink-0 text-white text-xs font-bold">2</div>
-              <div>
-                <p className="text-sm font-medium">Configura tu iPhone</p>
-                <p className="text-xs text-muted-foreground">Ajustes → Cámara → Formatos → Compatible</p>
-              </div>
-            </div>
-          </div>
+          <p className="text-sm text-muted-foreground">Usa la cámara de la app (botón blanco) o configura tu iPhone en formato Compatible.</p>
           <div className="flex flex-col gap-2 pt-2">
             <Button onClick={retake} className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700">
               <Camera className="w-4 h-4" />
               Usar Cámara
             </Button>
-            <Button variant="outline" onClick={onClose} className="w-full">
-              Cerrar
-            </Button>
+            <Button variant="outline" onClick={onClose} className="w-full">Cerrar</Button>
           </div>
         </div>
       </div>
     );
   }
 
-  // No permission or error view
+  // No permission view - show upload option
   if (hasPermission === false) {
     return (
       <div className="fixed inset-0 z-50 bg-black flex items-center justify-center p-6">
         <div className="text-white text-center space-y-4 max-w-sm">
           <CameraOff className="w-16 h-16 mx-auto opacity-50" />
           <p className="text-lg font-medium">Sin acceso a cámara</p>
-          <p className="text-sm opacity-70">{initError || 'Sube una foto desde tu galería'}</p>
+          <p className="text-sm opacity-70">Sube una foto desde tu galería</p>
           
           {errorMsg && (
-            <div className="bg-red-500/20 text-red-200 p-4 rounded-xl text-sm">
-              {errorMsg}
-            </div>
+            <div className="bg-red-500/20 text-red-200 p-4 rounded-xl text-sm">{errorMsg}</div>
           )}
           
           <div className="flex flex-col gap-3 mt-6">
             <Button onClick={() => fileInputRef.current?.click()} className="w-full gap-2 rounded-xl" disabled={isProcessingImage}>
-              {isProcessingImage ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> Procesando...</>
-                ) : (
-                <><ImageIcon className="w-4 h-4" /> Subir Foto</>
-              )}
+              {isProcessingImage ? <><Loader2 className="w-4 h-4 animate-spin" /> Procesando...</> : <><ImageIcon className="w-4 h-4" /> Subir Foto</>}
             </Button>
-            <Button variant="outline" onClick={onClose} className="w-full text-white border-white/30 rounded-xl">
-              Cerrar
-            </Button>
+            <Button variant="outline" onClick={onClose} className="w-full text-white border-white/30 rounded-xl">Cerrar</Button>
           </div>
           <input ref={fileInputRef} type="file" accept="image/*,.heic,.heif" onChange={handleFileUpload} className="hidden" />
         </div>
@@ -419,27 +346,15 @@ export function CameraCapture({ onCapture, onClose, isAnalyzing }: CameraCapture
     );
   }
 
+  // Main camera view
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
-      {/* Loading overlay with close button */}
-      {isLoading && !capturedImage && (
+      {/* Loading overlay */}
+      {(isLoading || isProcessingImage) && !capturedImage && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-10">
           <Loader2 className="w-10 h-10 animate-spin text-white mb-3" />
-          <p className="text-white text-base mb-4">Iniciando cámara...</p>
-          <Button variant="outline" onClick={onClose} className="text-white border-white/30">
-            Cancelar
-          </Button>
-        </div>
-      )}
-      
-      {/* Processing overlay */}
-      {isProcessingImage && !capturedImage && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-10">
-          <Loader2 className="w-10 h-10 animate-spin text-white mb-3" />
-          <p className="text-white text-base mb-4">Procesando imagen...</p>
-          <Button variant="outline" onClick={onClose} className="text-white border-white/30">
-            Cancelar
-          </Button>
+          <p className="text-white text-base mb-4">{isProcessingImage ? 'Procesando imagen...' : 'Iniciando cámara...'}</p>
+          <Button variant="outline" onClick={onClose} className="text-white border-white/30">Cancelar</Button>
         </div>
       )}
       
